@@ -3,7 +3,7 @@ package com.example.planreminder.data
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-// 这是计划数据的唯一事实来源，既给页面显示，也给提醒调度使用。
+// 计划实体既驱动界面展示，也作为提醒调度和恢复的持久化来源。
 @Entity(tableName = "plans")
 data class PlanItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -11,5 +11,7 @@ data class PlanItem(
     val location: String,
     val scheduledAtMillis: Long,
     val reminderLeadMinutes: Int = 10,
+    val enableAlarmSound: Boolean = true,
+    val enableVibration: Boolean = true,
     val createdAtMillis: Long = System.currentTimeMillis(),
 )

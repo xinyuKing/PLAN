@@ -2,7 +2,7 @@ package com.example.planreminder.data
 
 import kotlinx.coroutines.flow.Flow
 
-// 用一层轻量仓库隔离数据库细节，避免 ViewModel 直接依赖 Room。
+// 通过轻量仓库层隔离 Room 细节，让 ViewModel 只处理业务流程。
 class PlanRepository(
     private val planDao: PlanDao,
 ) {

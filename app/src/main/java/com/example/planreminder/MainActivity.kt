@@ -29,7 +29,7 @@ import com.example.planreminder.i18n.appStringsFor
 import com.example.planreminder.ui.PlanReminderScreen
 import com.example.planreminder.ui.theme.PlanReminderTheme
 
-// 承载 Compose 页面，并把权限、语音输入和页面状态接起来。
+// 负责连接页面、系统权限和语音录入流程，让 Compose 界面与业务状态保持同步。
 class MainActivity : AppCompatActivity() {
     private val viewModel: PlanViewModel by viewModels()
     private val realtimeSpeechClient = DashScopeRealtimeSpeechClient()
@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 DisposableEffect(lifecycle) {
-                    // 用户从系统设置返回后，要重新检查通知和精确提醒权限状态。
+                    // 用户从系统设置返回后，需要重新同步权限状态并恢复未来提醒。
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
                             hasNotificationPermission = checkNotificationPermission()

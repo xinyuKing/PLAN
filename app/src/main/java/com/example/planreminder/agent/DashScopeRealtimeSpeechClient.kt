@@ -21,7 +21,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 
-// 负责把麦克风 PCM 数据实时发送到 DashScope 语音识别服务。
+// 负责采集麦克风音频，并通过 WebSocket 持续发送到 DashScope 实时语音识别服务。
 class DashScopeRealtimeSpeechClient {
     interface Listener {
         fun onRecordingStarted()

@@ -43,6 +43,8 @@ data class VoiceAgentUiState(
     val isOpen: Boolean = false,
     val editingPlanId: Long? = null,
     val reminderLeadMinutes: Int = ReminderSettingsStore.DEFAULT_REMINDER_LEAD_MINUTES,
+    val enableAlarmSound: Boolean = true,
+    val enableVibration: Boolean = true,
     val isDraftPreviewVisible: Boolean = false,
     val isLoading: Boolean = false,
     val isRecording: Boolean = false,

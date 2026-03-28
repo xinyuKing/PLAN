@@ -8,7 +8,7 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
-// 让 Room 查询保持精简，上层只需要关注应用行为本身。
+// 将数据库查询控制在清晰边界内，让上层逻辑专注于业务编排。
 @Dao
 interface PlanDao {
     @Query("SELECT * FROM plans ORDER BY scheduledAtMillis ASC")

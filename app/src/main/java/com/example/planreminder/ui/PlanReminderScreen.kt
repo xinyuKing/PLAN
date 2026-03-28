@@ -1,7 +1,7 @@
 package com.example.planreminder.ui
 
-import android.app.DatePickerDialog
-import android.app.TimePickerDialog
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,11 +16,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.planreminder.agent.AgentMessageRole
@@ -33,8 +35,10 @@ import com.example.planreminder.i18n.AppLanguage
 import com.example.planreminder.i18n.AppStrings
 import com.example.planreminder.i18n.appStringsFor
 import com.example.planreminder.i18n.optionLabel
+import java.time.YearMonth
 import java.time.*
 import java.time.format.DateTimeFormatter
+import android.widget.NumberPicker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.delay
 
@@ -48,6 +52,8 @@ private data class PlanFormSeed(
     val date: LocalDate? = null,
     val time: LocalTime? = null,
     val reminderLeadMinutes: Int = ReminderSettingsStore.DEFAULT_REMINDER_LEAD_MINUTES,
+    val enableAlarmSound: Boolean = true,
+    val enableVibration: Boolean = true,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,8 +69,8 @@ fun PlanReminderScreen(
     voiceAgentState: VoiceAgentUiState,
     onRequestNotificationPermission: () -> Unit,
     onRequestExactAlarmPermission: () -> Unit,
-    onAddPlan: (String, String, LocalDate, LocalTime, Int) -> Unit,
-    onUpdatePlan: (Long, String, String, LocalDate, LocalTime, Int) -> Unit,
+    onAddPlan: (String, String, LocalDate, LocalTime, Int, Boolean, Boolean) -> Unit,
+    onUpdatePlan: (Long, String, String, LocalDate, LocalTime, Int, Boolean, Boolean) -> Unit,
     onDeletePlan: (PlanItem) -> Unit,
     onSaveSettings: (String, String, String, Int, AppLanguage) -> Unit,
     onOpenVoiceAgent: () -> Unit,
@@ -153,10 +159,10 @@ fun PlanReminderScreen(
     }
 
     if (showAddDialog) {
-        AddPlanDialog(strings, formSeed, onDismiss = { showAddDialog = false }) { title, location, date, time, leadMinutes ->
+        AddPlanDialog(strings, formSeed, onDismiss = { showAddDialog = false }) { title, location, date, time, leadMinutes, enableAlarmSound, enableVibration ->
             formSeed.planId?.let { planId ->
-                onUpdatePlan(planId, title, location, date, time, leadMinutes)
-            } ?: onAddPlan(title, location, date, time, leadMinutes)
+                onUpdatePlan(planId, title, location, date, time, leadMinutes, enableAlarmSound, enableVibration)
+            } ?: onAddPlan(title, location, date, time, leadMinutes, enableAlarmSound, enableVibration)
             showAddDialog = false
             formSeed = PlanFormSeed()
         }
@@ -175,6 +181,8 @@ fun PlanReminderScreen(
                 formSeed = voiceAgentState.draft.toPlanFormSeed(
                     planId = voiceAgentState.editingPlanId,
                     reminderLeadMinutes = voiceAgentState.reminderLeadMinutes,
+                    enableAlarmSound = voiceAgentState.enableAlarmSound,
+                    enableVibration = voiceAgentState.enableVibration,
                 )
                 showAddDialog = true
                 onDismissVoiceAgent()
@@ -265,6 +273,7 @@ private fun PlanCard(
     val normalizedLeadMinutes = ReminderSettingsStore.normalizeReminderLeadMinutes(plan.reminderLeadMinutes)
     val reminderAtMillis = plan.scheduledAtMillis - normalizedLeadMinutes * MILLIS_PER_MINUTE
     val status = plan.statusAt(nowMillis)
+    val statusPalette = rememberPlanStatusPalette(status)
     val statusText = when (status) {
         PlanStatus.BEFORE_REMINDER -> strings.statusBeforeReminder
         PlanStatus.REMINDER_WINDOW -> strings.statusReminderWindow
@@ -282,7 +291,11 @@ private fun PlanCard(
         )
     }
 
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(24.dp)) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, statusPalette.borderColor),
+    ) {
         Column(modifier = Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -304,6 +317,11 @@ private fun PlanCard(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 AssistChip(
                     onClick = {},
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = statusPalette.chipContainerColor,
+                        labelColor = statusPalette.chipContentColor,
+                        leadingIconContentColor = statusPalette.chipContentColor,
+                    ),
                     label = { Text(statusText) },
                     leadingIcon = {
                         Icon(
@@ -320,6 +338,16 @@ private fun PlanCard(
                     onClick = {},
                     label = { Text(strings.remindEarlyChip(normalizedLeadMinutes)) },
                     leadingIcon = { Icon(Icons.Default.AlarmOn, contentDescription = null) },
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text(if (plan.enableAlarmSound) strings.alarmSoundOnChip else strings.alarmSoundOffChip) },
+                    leadingIcon = { Icon(Icons.Default.AlarmOn, contentDescription = null) },
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text(if (plan.enableVibration) strings.vibrationOnChip else strings.vibrationOffChip) },
+                    leadingIcon = { Icon(Icons.Default.Vibration, contentDescription = null) },
                 )
                 if (plan.location.isNotBlank()) {
                     AssistChip(onClick = {}, label = { Text(plan.location) }, leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) })
@@ -346,14 +374,17 @@ private fun AddPlanDialog(
     strings: AppStrings,
     initialSeed: PlanFormSeed,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, LocalDate, LocalTime, Int) -> Unit,
+    onConfirm: (String, String, LocalDate, LocalTime, Int, Boolean, Boolean) -> Unit,
 ) {
     val fallbackDateTime = remember(initialSeed) { LocalDateTime.now().plusMinutes(30).withSecond(0).withNano(0) }
+    val formScrollState = rememberScrollState()
     var title by remember(initialSeed) { mutableStateOf(initialSeed.title) }
     var location by remember(initialSeed) { mutableStateOf(initialSeed.location) }
     var selectedDate by remember(initialSeed) { mutableStateOf(initialSeed.date ?: fallbackDateTime.toLocalDate()) }
     var selectedTime by remember(initialSeed) { mutableStateOf(initialSeed.time ?: fallbackDateTime.toLocalTime()) }
     var leadMinutesText by remember(initialSeed) { mutableStateOf(initialSeed.reminderLeadMinutes.toString()) }
+    var enableAlarmSound by remember(initialSeed) { mutableStateOf(initialSeed.enableAlarmSound) }
+    var enableVibration by remember(initialSeed) { mutableStateOf(initialSeed.enableVibration) }
     var leadMinutesError by remember { mutableStateOf<String?>(null) }
     val dateFormatter = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd") }
     val timeFormatter = remember { DateTimeFormatter.ofPattern("HH:mm") }
@@ -362,31 +393,58 @@ private fun AddPlanDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initialSeed.planId == null) strings.addPlan else strings.editPlan) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = title, onValueChange = { title = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(strings.taskLabel) })
-                OutlinedTextField(value = location, onValueChange = { location = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(strings.locationOptionalLabel) })
-                OutlinedTextField(
-                    value = leadMinutesText,
-                    onValueChange = { leadMinutesText = it; leadMinutesError = null },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(strings.reminderLeadMinutesLabel) },
-                    singleLine = true,
-                    isError = leadMinutesError != null,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    supportingText = {
-                        Text(
-                            leadMinutesError ?: strings.reminderLeadMinutesHint(
-                                ReminderSettingsStore.MIN_REMINDER_LEAD_MINUTES,
-                                ReminderSettingsStore.MAX_REMINDER_LEAD_MINUTES,
-                            ),
-                        )
-                    },
-                )
-                DateSelectorRow(strings, selectedDate.format(dateFormatter), selectedTime.format(timeFormatter), selectedDate, selectedTime, onPickDate = { year, month, day ->
-                    selectedDate = LocalDate.of(year, month + 1, day)
-                }, onPickTime = { hour, minute ->
-                    selectedTime = LocalTime.of(hour, minute)
-                })
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 18.dp)
+                        .verticalScroll(formScrollState),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    DateSelectorRow(strings, selectedDate.format(dateFormatter), selectedTime.format(timeFormatter), selectedDate, selectedTime, onPickDate = { year, month, day ->
+                        selectedDate = LocalDate.of(year, month + 1, day)
+                    }, onPickTime = { hour, minute ->
+                        selectedTime = LocalTime.of(hour, minute)
+                    })
+                    OutlinedTextField(value = title, onValueChange = { title = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(strings.taskLabel) })
+                    OutlinedTextField(value = location, onValueChange = { location = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(strings.locationOptionalLabel) })
+                    OutlinedTextField(
+                        value = leadMinutesText,
+                        onValueChange = { leadMinutesText = it; leadMinutesError = null },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(strings.reminderLeadMinutesLabel) },
+                        singleLine = true,
+                        isError = leadMinutesError != null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        supportingText = {
+                            Text(
+                                leadMinutesError ?: strings.reminderLeadMinutesHint(
+                                    ReminderSettingsStore.MIN_REMINDER_LEAD_MINUTES,
+                                    ReminderSettingsStore.MAX_REMINDER_LEAD_MINUTES,
+                                ),
+                            )
+                        },
+                    )
+                    ReminderFeedbackSection(
+                        strings = strings,
+                        enableAlarmSound = enableAlarmSound,
+                        enableVibration = enableVibration,
+                        onEnableAlarmSoundChange = { enableAlarmSound = it },
+                        onEnableVibrationChange = { enableVibration = it },
+                    )
+                }
+
+                if (formScrollState.maxValue > 0) {
+                    DialogScrollIndicator(
+                        scrollState = formScrollState,
+                        containerHeight = maxHeight,
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                    )
+                }
             }
         },
         confirmButton = {
@@ -401,11 +459,116 @@ private fun AddPlanDialog(
                     )
                     return@TextButton
                 }
-                onConfirm(title, location, selectedDate, selectedTime, parsedLeadMinutes!!)
+                onConfirm(
+                    title,
+                    location,
+                    selectedDate,
+                    selectedTime,
+                    parsedLeadMinutes!!,
+                    enableAlarmSound,
+                    enableVibration,
+                )
             }) { Text(strings.save) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(strings.cancel) } },
     )
+}
+
+@Composable
+private fun DialogScrollIndicator(
+    scrollState: ScrollState,
+    containerHeight: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val thumbHeight = 52.dp
+    val topBottomPadding = 6.dp
+    val trackHeight = (containerHeight - topBottomPadding * 2).coerceAtLeast(thumbHeight)
+    val maxOffset = (trackHeight - thumbHeight).coerceAtLeast(0.dp)
+    val scrollFraction = if (scrollState.maxValue == 0) {
+        0f
+    } else {
+        scrollState.value.toFloat() / scrollState.maxValue.toFloat()
+    }
+
+    Box(
+        modifier = modifier
+            .width(10.dp)
+            .fillMaxHeight()
+            .padding(vertical = topBottomPadding),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(4.dp)
+                .background(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                    shape = RoundedCornerShape(999.dp),
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .offset(y = maxOffset * scrollFraction)
+                .width(6.dp)
+                .height(thumbHeight)
+                .background(
+                    color = Color(0xFF3B82F6),
+                    shape = RoundedCornerShape(999.dp),
+                ),
+        )
+    }
+}
+
+@Composable
+private fun ReminderFeedbackSection(
+    strings: AppStrings,
+    enableAlarmSound: Boolean,
+    enableVibration: Boolean,
+    onEnableAlarmSoundChange: (Boolean) -> Unit,
+    onEnableVibrationChange: (Boolean) -> Unit,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(strings.reminderFeedbackLabel, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(strings.reminderFeedbackHint, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ReminderToggleRow(
+                icon = Icons.Default.AlarmOn,
+                label = strings.alarmSoundToggleLabel,
+                checked = enableAlarmSound,
+                onCheckedChange = onEnableAlarmSoundChange,
+            )
+            ReminderToggleRow(
+                icon = Icons.Default.Vibration,
+                label = strings.vibrationToggleLabel,
+                checked = enableVibration,
+                onCheckedChange = onEnableVibrationChange,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReminderToggleRow(
+    icon: ImageVector,
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text(label)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -526,7 +689,14 @@ private fun VoiceConversationDialog(
                 }
 
                 if (state.editingPlanId != null) {
-                    DraftSummaryCard(strings, state.draft, state.missingFields, state.reminderLeadMinutes)
+                    DraftSummaryCard(
+                        strings = strings,
+                        draft = state.draft,
+                        missingFields = state.missingFields,
+                        reminderLeadMinutes = state.reminderLeadMinutes,
+                        enableAlarmSound = state.enableAlarmSound,
+                        enableVibration = state.enableVibration,
+                    )
                 }
 
                 HorizontalDivider()
@@ -599,7 +769,14 @@ private fun VoiceDraftPreviewDialog(
                     }
                 }
 
-                DraftSummaryCard(strings, state.draft, state.missingFields, state.reminderLeadMinutes)
+                DraftSummaryCard(
+                    strings = strings,
+                    draft = state.draft,
+                    missingFields = state.missingFields,
+                    reminderLeadMinutes = state.reminderLeadMinutes,
+                    enableAlarmSound = state.enableAlarmSound,
+                    enableVibration = state.enableVibration,
+                )
                 Text(if (state.readyForConfirmation) strings.prefilledReadyDescription else strings.prefilledMissingDescription, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -650,7 +827,14 @@ private fun VoiceRecordButton(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DraftSummaryCard(strings: AppStrings, draft: AgentPlanDraft, missingFields: List<String>, reminderLeadMinutes: Int) {
+private fun DraftSummaryCard(
+    strings: AppStrings,
+    draft: AgentPlanDraft,
+    missingFields: List<String>,
+    reminderLeadMinutes: Int,
+    enableAlarmSound: Boolean,
+    enableVibration: Boolean,
+) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(strings.currentDraft, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -660,6 +844,16 @@ private fun DraftSummaryCard(strings: AppStrings, draft: AgentPlanDraft, missing
             DraftField(strings.timeField, draft.time, strings.missingPlaceholder)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 AssistChip(onClick = {}, label = { Text(strings.reminderLeadChip(reminderLeadMinutes)) }, leadingIcon = { Icon(Icons.Default.AlarmOn, contentDescription = null) })
+                AssistChip(
+                    onClick = {},
+                    label = { Text(if (enableAlarmSound) strings.alarmSoundOnChip else strings.alarmSoundOffChip) },
+                    leadingIcon = { Icon(Icons.Default.AlarmOn, contentDescription = null) },
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text(if (enableVibration) strings.vibrationOnChip else strings.vibrationOffChip) },
+                    leadingIcon = { Icon(Icons.Default.Vibration, contentDescription = null) },
+                )
                 if (missingFields.isNotEmpty()) {
                     missingFields.forEach { field ->
                         AssistChip(onClick = {}, label = { Text(strings.missingFieldChip(missingFieldLabel(field, strings))) })
@@ -690,38 +884,184 @@ private fun DateSelectorRow(
     onPickDate: (Int, Int, Int) -> Unit,
     onPickTime: (Int, Int) -> Unit,
 ) {
-    val context = LocalContext.current
+    val currentYear = remember { LocalDate.now().year }
+    val yearRange = remember(initialDate, currentYear) {
+        val start = minOf(currentYear, initialDate.year)
+        val end = maxOf(currentYear + 10, initialDate.year + 5)
+        start..end
+    }
+    var selectedYear by remember(initialDate) { mutableIntStateOf(initialDate.year) }
+    var selectedMonth by remember(initialDate) { mutableIntStateOf(initialDate.monthValue) }
+    var selectedDay by remember(initialDate) { mutableIntStateOf(initialDate.dayOfMonth) }
+    var selectedHour by remember(initialTime) { mutableIntStateOf(initialTime.hour) }
+    var selectedMinute by remember(initialTime) { mutableIntStateOf(initialTime.minute) }
+    val maxDay = remember(selectedYear, selectedMonth) {
+        YearMonth.of(selectedYear, selectedMonth).lengthOfMonth()
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(strings.startTimeLabel, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                DatePickerDialog(
-                    context,
-                    { _, year, month, dayOfMonth -> onPickDate(year, month, dayOfMonth) },
-                    initialDate.year,
-                    initialDate.monthValue - 1,
-                    initialDate.dayOfMonth,
-                ).show()
-            }) {
-                Icon(Icons.Default.EditCalendar, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text(selectedDateText)
-            }
-            OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                TimePickerDialog(context, { _, hourOfDay, minute -> onPickTime(hourOfDay, minute) }, initialTime.hour, initialTime.minute, true).show()
-            }) {
-                Icon(Icons.Default.AccessTime, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text(selectedTimeText)
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Schedule, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text(
+                        "$selectedDateText $selectedTimeText",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = strings.dateField,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    WheelPicker(
+                        label = strings.yearWheelLabel,
+                        value = selectedYear,
+                        range = yearRange,
+                        modifier = Modifier.weight(1.5f),
+                        wrapSelectorWheel = false,
+                    ) { newYear ->
+                        selectedYear = newYear
+                        val adjustedDay = minOf(selectedDay, YearMonth.of(newYear, selectedMonth).lengthOfMonth())
+                        if (adjustedDay != selectedDay) {
+                            selectedDay = adjustedDay
+                        }
+                        onPickDate(selectedYear, selectedMonth - 1, selectedDay)
+                    }
+                    WheelPicker(
+                        label = strings.monthWheelLabel,
+                        value = selectedMonth,
+                        range = 1..12,
+                        modifier = Modifier.weight(1f),
+                        formatValue = { value -> value.toString().padStart(2, '0') },
+                    ) { newMonth ->
+                        selectedMonth = newMonth
+                        val adjustedDay = minOf(selectedDay, YearMonth.of(selectedYear, newMonth).lengthOfMonth())
+                        if (adjustedDay != selectedDay) {
+                            selectedDay = adjustedDay
+                        }
+                        onPickDate(selectedYear, selectedMonth - 1, selectedDay)
+                    }
+                    WheelPicker(
+                        label = strings.dayWheelLabel,
+                        value = selectedDay.coerceIn(1, maxDay),
+                        range = 1..maxDay,
+                        modifier = Modifier.weight(1f),
+                        formatValue = { value -> value.toString().padStart(2, '0') },
+                    ) { newDay ->
+                        selectedDay = newDay
+                        onPickDate(selectedYear, selectedMonth - 1, selectedDay)
+                    }
+                }
+                Text(
+                    text = strings.timeField,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    WheelPicker(
+                        label = strings.hourWheelLabel,
+                        value = selectedHour,
+                        range = 0..23,
+                        modifier = Modifier.weight(1f),
+                        formatValue = { value -> value.toString().padStart(2, '0') },
+                    ) { newHour ->
+                        selectedHour = newHour
+                        onPickTime(selectedHour, selectedMinute)
+                    }
+                    WheelPicker(
+                        label = strings.minuteWheelLabel,
+                        value = selectedMinute,
+                        range = 0..59,
+                        modifier = Modifier.weight(1f),
+                        formatValue = { value -> value.toString().padStart(2, '0') },
+                    ) { newMinute ->
+                        selectedMinute = newMinute
+                        onPickTime(selectedHour, selectedMinute)
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun WheelPicker(
+    label: String,
+    value: Int,
+    range: IntRange,
+    modifier: Modifier = Modifier,
+    wrapSelectorWheel: Boolean = true,
+    formatValue: (Int) -> String = { it.toString() },
+    onValueChange: (Int) -> Unit,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        AndroidView(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(156.dp),
+            factory = { context ->
+                NumberPicker(context).apply {
+                    descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
+                    minValue = range.first
+                    maxValue = range.last
+                    setWrapSelectorWheel(wrapSelectorWheel)
+                    setFormatter { number -> formatValue(number) }
+                    this.value = value.coerceIn(range.first, range.last)
+                    setOnValueChangedListener { _, _, newValue ->
+                        onValueChange(newValue)
+                    }
+                }
+            },
+            update = { picker ->
+                picker.setOnValueChangedListener(null)
+                picker.minValue = range.first
+                picker.maxValue = range.last
+                picker.setWrapSelectorWheel(wrapSelectorWheel)
+                picker.setFormatter { number -> formatValue(number) }
+                val safeValue = value.coerceIn(range.first, range.last)
+                if (picker.value != safeValue) {
+                    picker.value = safeValue
+                }
+                picker.setOnValueChangedListener { _, _, newValue ->
+                    onValueChange(newValue)
+                }
+            },
+        )
     }
 }
 
 private fun AgentPlanDraft.toPlanFormSeed(
     planId: Long? = null,
     reminderLeadMinutes: Int = ReminderSettingsStore.DEFAULT_REMINDER_LEAD_MINUTES,
+    enableAlarmSound: Boolean = true,
+    enableVibration: Boolean = true,
 ): PlanFormSeed {
     val date = runCatching { LocalDate.parse(this.date, DateTimeFormatter.ofPattern("yyyy-MM-dd")) }.getOrNull()
     val time = runCatching { LocalTime.parse(this.time, DateTimeFormatter.ofPattern("HH:mm")) }.getOrNull()
@@ -732,6 +1072,8 @@ private fun AgentPlanDraft.toPlanFormSeed(
         date = date,
         time = time,
         reminderLeadMinutes = reminderLeadMinutes,
+        enableAlarmSound = enableAlarmSound,
+        enableVibration = enableVibration,
     )
 }
 
@@ -744,8 +1086,40 @@ private fun PlanItem.toPlanFormSeed(): PlanFormSeed {
         date = dateTime.toLocalDate(),
         time = dateTime.toLocalTime().withSecond(0).withNano(0),
         reminderLeadMinutes = reminderLeadMinutes,
+        enableAlarmSound = enableAlarmSound,
+        enableVibration = enableVibration,
     )
 }
+
+@Composable
+private fun rememberPlanStatusPalette(status: PlanStatus): PlanStatusPalette {
+    val colorScheme = MaterialTheme.colorScheme
+    return remember(status, colorScheme) {
+        when (status) {
+            PlanStatus.BEFORE_REMINDER -> PlanStatusPalette(
+                borderColor = colorScheme.secondary.copy(alpha = 0.42f),
+                chipContainerColor = colorScheme.secondaryContainer,
+                chipContentColor = colorScheme.onSecondaryContainer,
+            )
+            PlanStatus.REMINDER_WINDOW -> PlanStatusPalette(
+                borderColor = colorScheme.tertiary.copy(alpha = 0.52f),
+                chipContainerColor = colorScheme.tertiaryContainer,
+                chipContentColor = colorScheme.onTertiaryContainer,
+            )
+            PlanStatus.OVERDUE -> PlanStatusPalette(
+                borderColor = colorScheme.error.copy(alpha = 0.58f),
+                chipContainerColor = colorScheme.errorContainer,
+                chipContentColor = colorScheme.onErrorContainer,
+            )
+        }
+    }
+}
+
+private data class PlanStatusPalette(
+    val borderColor: Color,
+    val chipContainerColor: Color,
+    val chipContentColor: Color,
+)
 
 private fun missingFieldLabel(field: String, strings: AppStrings): String = when (field) {
     "title" -> strings.taskField

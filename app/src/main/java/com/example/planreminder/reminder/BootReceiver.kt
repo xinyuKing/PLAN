@@ -9,7 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-// 在设备重启、应用更新或精确提醒权限变化后恢复未来计划的提醒。
+// 在系统重启、应用更新或精确提醒权限变化后，重新注册未来计划的提醒。
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val pendingResult = goAsync()

@@ -34,7 +34,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-// 统一协调页面状态、计划持久化、提醒调度和语音助手流程。
+// 集中管理计划列表、保存流程、提醒重排和语音助手状态，是页面层的主要业务入口。
 class PlanViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = PlanRepository(PlanDatabase.getInstance(application).planDao())
     private val reminderScheduler = ReminderScheduler(application)
@@ -43,7 +43,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
     private val languageSettingsStore = LanguageSettingsStore(application)
     private val qwenPlanAgentClient = QwenPlanAgentClient()
 
-    // 保留 Room 的最新快照，方便 Compose 直接订阅。
+    // 直接暴露 Room 的实时数据流，方便 Compose 页面持续订阅最新计划列表。
     val plans = repository.observePlans()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
@@ -67,9 +67,19 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         date: LocalDate,
         time: LocalTime,
         reminderLeadMinutes: Int,
+        enableAlarmSound: Boolean,
+        enableVibration: Boolean,
     ) {
         viewModelScope.launch {
-            savePlanInternal(title, location, date, time, reminderLeadMinutes)
+            savePlanInternal(
+                title = title,
+                location = location,
+                date = date,
+                time = time,
+                reminderLeadMinutes = reminderLeadMinutes,
+                enableAlarmSound = enableAlarmSound,
+                enableVibration = enableVibration,
+            )
         }
     }
 
@@ -80,9 +90,20 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         date: LocalDate,
         time: LocalTime,
         reminderLeadMinutes: Int,
+        enableAlarmSound: Boolean,
+        enableVibration: Boolean,
     ) {
         viewModelScope.launch {
-            savePlanInternal(title, location, date, time, reminderLeadMinutes, existingPlanId = planId)
+            savePlanInternal(
+                title = title,
+                location = location,
+                date = date,
+                time = time,
+                reminderLeadMinutes = reminderLeadMinutes,
+                enableAlarmSound = enableAlarmSound,
+                enableVibration = enableVibration,
+                existingPlanId = planId,
+            )
         }
     }
 
@@ -129,6 +150,8 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         _voiceAgentState.value = VoiceAgentUiState(
             isOpen = true,
             reminderLeadMinutes = reminderLeadMinutes.value,
+            enableAlarmSound = true,
+            enableVibration = true,
             isDraftPreviewVisible = false,
             messages = listOf(
                 AgentMessage(
@@ -151,6 +174,8 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
             isOpen = true,
             editingPlanId = planItem.id,
             reminderLeadMinutes = planItem.reminderLeadMinutes,
+            enableAlarmSound = planItem.enableAlarmSound,
+            enableVibration = planItem.enableVibration,
             isDraftPreviewVisible = false,
             draft = draft,
             missingFields = calculateMissingFields(draft),
@@ -313,6 +338,8 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                     date,
                     time,
                     state.reminderLeadMinutes,
+                    state.enableAlarmSound,
+                    state.enableVibration,
                     state.editingPlanId,
                 )
             ) {
@@ -341,6 +368,8 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         date: LocalDate,
         time: LocalTime,
         reminderLeadMinutes: Int,
+        enableAlarmSound: Boolean,
+        enableVibration: Boolean,
         existingPlanId: Long? = null,
     ): Boolean {
         val normalizedTitle = title.trim()
@@ -370,6 +399,8 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 location = normalizedLocation,
                 scheduledAtMillis = scheduledAtMillis,
                 reminderLeadMinutes = normalizedLeadMinutes,
+                enableAlarmSound = enableAlarmSound,
+                enableVibration = enableVibration,
                 createdAtMillis = existingPlan?.createdAtMillis ?: System.currentTimeMillis(),
             )
 
