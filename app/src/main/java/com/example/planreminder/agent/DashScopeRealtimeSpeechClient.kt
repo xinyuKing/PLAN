@@ -21,7 +21,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 
-// 把麦克风 PCM 数据实时发送到 DashScope 语音识别服务，避免依赖系统语音服务。
+// 负责把麦克风 PCM 数据实时发送到 DashScope 语音识别服务。
 class DashScopeRealtimeSpeechClient {
     interface Listener {
         fun onRecordingStarted()
@@ -98,11 +98,20 @@ class DashScopeRealtimeSpeechClient {
     private fun createWebSocketListener(): WebSocketListener {
         return object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (!isCurrentSocket(webSocket)) {
+                    webSocket.cancel()
+                    return
+                }
+
                 webSocket.send(sessionUpdateEvent())
                 startRecordingInternal(webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (!isCurrentSocket(webSocket)) {
+                    return
+                }
+
                 handleServerMessage(text)
             }
 
@@ -111,10 +120,19 @@ class DashScopeRealtimeSpeechClient {
                 t: Throwable,
                 response: Response?,
             ) {
+                if (!isCurrentSocket(webSocket)) {
+                    return
+                }
+
+                this@DashScopeRealtimeSpeechClient.webSocket = null
                 reportError(t.message ?: "语音识别连接失败，请检查网络和接口配置。")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (!isCurrentSocket(webSocket)) {
+                    return
+                }
+
                 stopRecordingInternal(notify = false)
                 this@DashScopeRealtimeSpeechClient.webSocket = null
 
@@ -153,7 +171,12 @@ class DashScopeRealtimeSpeechClient {
 
                     when {
                         bytesRead > 0 -> {
-                            val audioBase64 = Base64.encodeToString(buffer, 0, bytesRead, Base64.NO_WRAP)
+                            val audioBase64 = Base64.encodeToString(
+                                buffer,
+                                0,
+                                bytesRead,
+                                Base64.NO_WRAP,
+                            )
                             webSocket.send(
                                 JSONObject()
                                     .put("event_id", UUID.randomUUID().toString())
@@ -220,8 +243,6 @@ class DashScopeRealtimeSpeechClient {
                     .orEmpty()
                     .ifBlank { "语音转写失败，请稍后重试。" }
                 reportError(message)
-                webSocket?.cancel()
-                webSocket = null
             }
 
             "error" -> {
@@ -231,18 +252,26 @@ class DashScopeRealtimeSpeechClient {
                     .ifBlank { json.optString("message") }
                     .ifBlank { "语音识别请求失败，请检查接口配置。" }
                 reportError(message)
-                webSocket?.cancel()
-                webSocket = null
             }
         }
     }
 
     private fun reportError(message: String) {
+        val currentSocket = webSocket
+        webSocket = null
+
         stopRecordingInternal(notify = false)
         isStopping = false
         finalTranscript = ""
+
         listener?.onError(message)
         listener = null
+
+        currentSocket?.cancel()
+    }
+
+    private fun isCurrentSocket(candidate: WebSocket): Boolean {
+        return webSocket === candidate
     }
 
     private fun createAudioRecord(): AudioRecord {

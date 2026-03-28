@@ -41,6 +41,9 @@ data class AgentPlanDraft(
 
 data class VoiceAgentUiState(
     val isOpen: Boolean = false,
+    val editingPlanId: Long? = null,
+    val reminderLeadMinutes: Int = ReminderSettingsStore.DEFAULT_REMINDER_LEAD_MINUTES,
+    val isDraftPreviewVisible: Boolean = false,
     val isLoading: Boolean = false,
     val isRecording: Boolean = false,
     val isTranscribing: Boolean = false,

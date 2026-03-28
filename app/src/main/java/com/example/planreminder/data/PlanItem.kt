@@ -10,5 +10,6 @@ data class PlanItem(
     val title: String,
     val location: String,
     val scheduledAtMillis: Long,
+    val reminderLeadMinutes: Int = 10,
     val createdAtMillis: Long = System.currentTimeMillis(),
 )

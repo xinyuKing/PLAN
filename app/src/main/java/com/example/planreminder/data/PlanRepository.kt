@@ -13,7 +13,14 @@ class PlanRepository(
         return planItem.copy(id = id)
     }
 
+    suspend fun updatePlan(planItem: PlanItem): PlanItem {
+        planDao.update(planItem)
+        return planItem
+    }
+
     suspend fun deletePlan(planItem: PlanItem) = planDao.delete(planItem)
+
+    suspend fun findPlan(id: Long): PlanItem? = planDao.findById(id)
 
     suspend fun getUpcomingPlans(now: Long): List<PlanItem> = planDao.upcomingPlans(now)
 }

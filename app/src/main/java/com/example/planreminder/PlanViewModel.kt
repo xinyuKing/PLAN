@@ -14,7 +14,11 @@ import com.example.planreminder.agent.VoiceAgentUiState
 import com.example.planreminder.data.PlanDatabase
 import com.example.planreminder.data.PlanItem
 import com.example.planreminder.data.PlanRepository
+import com.example.planreminder.i18n.AppLanguage
+import com.example.planreminder.i18n.LanguageSettingsStore
+import com.example.planreminder.i18n.appStringsFor
 import com.example.planreminder.reminder.ReminderScheduler
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -30,20 +34,22 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-// 统一协调页面状态、计划持久化、提醒调度和语音助手状态。
+// 统一协调页面状态、计划持久化、提醒调度和语音助手流程。
 class PlanViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = PlanRepository(PlanDatabase.getInstance(application).planDao())
     private val reminderScheduler = ReminderScheduler(application)
     private val agentSettingsStore = AgentSettingsStore(application)
     private val reminderSettingsStore = ReminderSettingsStore(application)
+    private val languageSettingsStore = LanguageSettingsStore(application)
     private val qwenPlanAgentClient = QwenPlanAgentClient()
 
-    // 用 stateIn 保留最新的 Room 数据快照，方便 Compose 直接订阅。
+    // 保留 Room 的最新快照，方便 Compose 直接订阅。
     val plans = repository.observePlans()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     val agentSettings: StateFlow<AgentSettings> = agentSettingsStore.settings
     val reminderLeadMinutes: StateFlow<Int> = reminderSettingsStore.reminderLeadMinutes
+    val appLanguage: StateFlow<AppLanguage> = languageSettingsStore.language
 
     private val _voiceAgentState = MutableStateFlow(VoiceAgentUiState())
     val voiceAgentState = _voiceAgentState.asStateFlow()
@@ -51,14 +57,32 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
     private val _messages = MutableSharedFlow<String>()
     val messages = _messages.asSharedFlow()
 
+    init {
+        refreshReminderSchedules()
+    }
+
     fun addPlan(
         title: String,
         location: String,
         date: LocalDate,
         time: LocalTime,
+        reminderLeadMinutes: Int,
     ) {
         viewModelScope.launch {
-            savePlanInternal(title, location, date, time)
+            savePlanInternal(title, location, date, time, reminderLeadMinutes)
+        }
+    }
+
+    fun updatePlan(
+        planId: Long,
+        title: String,
+        location: String,
+        date: LocalDate,
+        time: LocalTime,
+        reminderLeadMinutes: Int,
+    ) {
+        viewModelScope.launch {
+            savePlanInternal(title, location, date, time, reminderLeadMinutes, existingPlanId = planId)
         }
     }
 
@@ -68,9 +92,9 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                 repository.deletePlan(planItem)
                 reminderScheduler.cancel(planItem.id)
             }.onSuccess {
-                _messages.emit("计划已删除。")
+                _messages.emit(currentStrings().planDeletedMessage)
             }.onFailure {
-                _messages.emit("删除计划失败，请稍后重试。")
+                _messages.emit(currentStrings().deletePlanFailedMessage)
             }
         }
     }
@@ -80,6 +104,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         apiKey: String,
         model: String,
         reminderLeadMinutes: Int,
+        language: AppLanguage,
     ) {
         val normalizedLeadMinutes = ReminderSettingsStore.normalizeReminderLeadMinutes(reminderLeadMinutes)
         val settings = AgentSettings(
@@ -90,24 +115,53 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
 
         agentSettingsStore.save(settings)
         reminderSettingsStore.saveReminderLeadMinutes(normalizedLeadMinutes)
+        languageSettingsStore.saveLanguage(language)
 
         viewModelScope.launch {
-            rescheduleUpcomingPlans(normalizedLeadMinutes)
-            _messages.emit("设置已保存，未来计划会按新的提醒时间重新调度。")
+            rescheduleUpcomingPlans()
+            _messages.emit(appStringsFor(language).settingsSavedMessage)
         }
     }
 
     fun openVoiceAgent() {
         val settings = agentSettings.value
+        val strings = currentStrings()
         _voiceAgentState.value = VoiceAgentUiState(
             isOpen = true,
+            reminderLeadMinutes = reminderLeadMinutes.value,
+            isDraftPreviewVisible = false,
             messages = listOf(
                 AgentMessage(
                     role = AgentMessageRole.ASSISTANT,
                     text = if (settings.isConfigured()) {
-                        "你可以点击开始录音，说完后再点结束录音。例如：明天晚上七点在健身房练腿。地点是选填项，信息不完整也没关系，我会继续追问。"
+                        strings.initialVoiceConfiguredMessage
                     } else {
-                        "请先在设置里填写千问的接口地址、接口密钥和模型名称。"
+                        strings.initialVoiceNeedConfigMessage
+                    },
+                ),
+            ),
+        )
+    }
+
+    fun openVoiceAgentForEdit(planItem: PlanItem) {
+        val settings = agentSettings.value
+        val strings = currentStrings()
+        val draft = planItem.toAgentPlanDraft()
+        _voiceAgentState.value = VoiceAgentUiState(
+            isOpen = true,
+            editingPlanId = planItem.id,
+            reminderLeadMinutes = planItem.reminderLeadMinutes,
+            isDraftPreviewVisible = false,
+            draft = draft,
+            missingFields = calculateMissingFields(draft),
+            readyForConfirmation = true,
+            messages = listOf(
+                AgentMessage(
+                    role = AgentMessageRole.ASSISTANT,
+                    text = if (settings.isConfigured()) {
+                        strings.initialVoiceEditMessage
+                    } else {
+                        strings.initialVoiceNeedConfigMessage
                     },
                 ),
             ),
@@ -122,7 +176,9 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         _voiceAgentState.update {
             it.copy(
                 isOpen = true,
+                isDraftPreviewVisible = false,
                 isRecording = true,
+                isLoading = false,
                 isTranscribing = false,
                 liveTranscript = "",
             )
@@ -142,6 +198,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         _voiceAgentState.update {
             it.copy(
                 isOpen = true,
+                isDraftPreviewVisible = false,
                 liveTranscript = text,
             )
         }
@@ -150,6 +207,20 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
     fun clearVoiceCaptureState() {
         _voiceAgentState.update {
             it.copy(
+                isDraftPreviewVisible = false,
+                isRecording = false,
+                isTranscribing = false,
+                liveTranscript = "",
+            )
+        }
+    }
+
+    fun continueVoiceConversation() {
+        _voiceAgentState.update {
+            it.copy(
+                isOpen = true,
+                isDraftPreviewVisible = false,
+                isLoading = false,
                 isRecording = false,
                 isTranscribing = false,
                 liveTranscript = "",
@@ -161,7 +232,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         val normalized = transcript.trim()
         if (normalized.isBlank()) {
             viewModelScope.launch {
-                _messages.emit("没有识别到清晰的语音内容，请再试一次。")
+                _messages.emit(currentStrings().noClearVoiceMessage)
             }
             return
         }
@@ -169,7 +240,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
         val settings = agentSettings.value
         if (!settings.isConfigured()) {
             viewModelScope.launch {
-                _messages.emit("请先完成接口设置，再使用语音添加。")
+                _messages.emit(currentStrings().configureApiBeforeVoiceMessage)
             }
             return
         }
@@ -182,6 +253,7 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
 
         _voiceAgentState.value = currentState.copy(
             isOpen = true,
+            isDraftPreviewVisible = false,
             isLoading = true,
             isRecording = false,
             isTranscribing = false,
@@ -195,10 +267,12 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                     settings = settings,
                     history = updatedHistory,
                     draft = currentState.draft,
+                    language = appLanguage.value,
                 )
             }.onSuccess { reply ->
                 _voiceAgentState.value = _voiceAgentState.value.copy(
                     isOpen = true,
+                    isDraftPreviewVisible = true,
                     isLoading = false,
                     draft = reply.draft,
                     missingFields = reply.missingFields,
@@ -209,26 +283,39 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 )
             }.onFailure { error ->
-                _voiceAgentState.value = _voiceAgentState.value.copy(isLoading = false)
-                _messages.emit(error.message ?: "调用千问失败，请检查网络或接口配置。")
+                _voiceAgentState.value = _voiceAgentState.value.copy(
+                    isDraftPreviewVisible = false,
+                    isLoading = false,
+                )
+                _messages.emit(error.message ?: currentStrings().qwenFailedMessage)
             }
         }
     }
 
     fun confirmVoicePlan() {
-        val draft = _voiceAgentState.value.draft
+        val state = _voiceAgentState.value
+        val draft = state.draft
         val date = runCatching { LocalDate.parse(draft.date, DATE_FORMATTER) }.getOrNull()
         val time = runCatching { LocalTime.parse(draft.time, TIME_FORMATTER) }.getOrNull()
 
         if (date == null || time == null) {
             viewModelScope.launch {
-                _messages.emit("语音识别得到的日期或时间格式不完整，请继续补充或改为手动调整。")
+                _messages.emit(currentStrings().incompleteDateTimeMessage)
             }
             return
         }
 
         viewModelScope.launch {
-            if (savePlanInternal(draft.title, draft.location, date, time)) {
+            if (
+                savePlanInternal(
+                    draft.title,
+                    draft.location,
+                    date,
+                    time,
+                    state.reminderLeadMinutes,
+                    state.editingPlanId,
+                )
+            ) {
                 closeVoiceAgent()
             }
         }
@@ -242,18 +329,26 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
 
     fun canScheduleExactAlarms(): Boolean = reminderScheduler.canScheduleExactAlarms()
 
+    fun refreshReminderSchedules() {
+        viewModelScope.launch {
+            rescheduleUpcomingPlans()
+        }
+    }
+
     private suspend fun savePlanInternal(
         title: String,
         location: String,
         date: LocalDate,
         time: LocalTime,
+        reminderLeadMinutes: Int,
+        existingPlanId: Long? = null,
     ): Boolean {
         val normalizedTitle = title.trim()
         val normalizedLocation = location.trim()
-        val leadMinutes = reminderLeadMinutes.value
+        val normalizedLeadMinutes = ReminderSettingsStore.normalizeReminderLeadMinutes(reminderLeadMinutes)
 
         if (normalizedTitle.isBlank()) {
-            _messages.emit("请填写事项或实践内容。")
+            _messages.emit(currentStrings().fillTaskMessage)
             return false
         }
 
@@ -263,39 +358,71 @@ class PlanViewModel(application: Application) : AndroidViewModel(application) {
             .toEpochMilli()
 
         if (scheduledAtMillis <= System.currentTimeMillis()) {
-            _messages.emit("计划时间必须晚于当前时间。")
+            _messages.emit(currentStrings().planTimeFutureMessage)
             return false
         }
 
         return runCatching {
-            repository.addPlan(
-                PlanItem(
-                    title = normalizedTitle,
-                    location = normalizedLocation,
-                    scheduledAtMillis = scheduledAtMillis,
-                ),
-            ).also { reminderScheduler.schedule(it, leadMinutes) }
+            val existingPlan = existingPlanId?.let { repository.findPlan(it) }
+            val targetPlan = PlanItem(
+                id = existingPlanId ?: 0,
+                title = normalizedTitle,
+                location = normalizedLocation,
+                scheduledAtMillis = scheduledAtMillis,
+                reminderLeadMinutes = normalizedLeadMinutes,
+                createdAtMillis = existingPlan?.createdAtMillis ?: System.currentTimeMillis(),
+            )
+
+            val savedPlan = if (existingPlanId == null) {
+                repository.addPlan(targetPlan)
+            } else {
+                checkNotNull(existingPlan)
+                repository.updatePlan(targetPlan)
+            }
+
+            savedPlan.also { reminderScheduler.schedule(it) }
         }.onSuccess {
+            val strings = currentStrings()
             _messages.emit(
-                if (scheduledAtMillis - System.currentTimeMillis() <= leadMinutes * 60_000L) {
-                    "计划已保存，距离开始不足 $leadMinutes 分钟，系统会尽快提醒你。"
+                if (scheduledAtMillis - System.currentTimeMillis() <= normalizedLeadMinutes * 60_000L) {
+                    strings.planSavedNearStart(normalizedLeadMinutes)
                 } else {
-                    "计划已保存，系统会在开始前 $leadMinutes 分钟提醒你。"
+                    strings.planSavedLead(normalizedLeadMinutes)
                 },
             )
         }.onFailure {
-            _messages.emit("保存计划失败，请稍后重试。")
+            _messages.emit(currentStrings().savePlanFailedMessage)
         }.isSuccess
     }
 
-    private suspend fun rescheduleUpcomingPlans(leadMinutes: Int) {
+    private suspend fun rescheduleUpcomingPlans() {
         repository.getUpcomingPlans(System.currentTimeMillis()).forEach { plan ->
-            reminderScheduler.schedule(plan, leadMinutes)
+            reminderScheduler.schedule(plan)
         }
     }
+
+    private fun calculateMissingFields(draft: AgentPlanDraft): List<String> {
+        return buildList {
+            if (draft.title.isBlank()) add("title")
+            if (draft.date.isBlank()) add("date")
+            if (draft.time.isBlank()) add("time")
+        }
+    }
+
+    private fun currentStrings() = appStringsFor(appLanguage.value)
 
     companion object {
         private val DATE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     }
+}
+
+private fun PlanItem.toAgentPlanDraft(): AgentPlanDraft {
+    val dateTime = Instant.ofEpochMilli(scheduledAtMillis).atZone(ZoneId.systemDefault())
+    return AgentPlanDraft(
+        title = title,
+        location = location,
+        date = dateTime.toLocalDate().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")),
+        time = dateTime.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")),
+    )
 }

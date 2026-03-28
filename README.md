@@ -1,56 +1,143 @@
-# Plan Reminder
+# 计划提醒
 
-A native Android app for local planning and reminders.
+一个原生 Android 计划提醒应用，用来本地记录待办、训练安排或日程，并在开始前按设定时间发出提醒。
 
-## What it does
+## 项目简介
 
-- Add a plan with:
-  - task / practice
-  - location
-  - start time
-- Save data locally with Room
-- Trigger a local notification 10 minutes before the plan starts
-- Re-schedule reminders after device reboot or app update
-- Works without any backend service
+这个应用的核心目标是：
 
-## Tech stack
+- 本地保存计划，不依赖自建后端
+- 支持手动录入，也支持语音添加计划
+- 在计划开始前自动触发本地通知提醒
+- 设备重启、应用更新后自动恢复未来提醒
+
+目前语音助手已经调整为“先语音、后确认”的流程：
+
+1. 用户先进入纯语音对话界面
+2. 说完一段后，系统识别并整理出预填充草稿
+3. 弹出确认弹窗，提供三个操作：
+   - `继续添加语音`
+   - `手动调整`
+   - `直接确认`
+
+## 主要功能
+
+- 手动创建计划
+  - 填写事项
+  - 填写地点（可选）
+  - 选择日期和时间
+
+- 语音创建计划
+  - 录音并实时转写语音内容
+  - 调用模型整理事项、日期、时间等字段
+  - 通过预填充弹窗完成二次确认
+
+- 本地提醒
+  - 使用 `AlarmManager` 调度提醒
+  - 默认支持“开始前若干分钟提醒”
+  - 如果距离开始时间太近，会尽快提醒而不是直接丢弃
+
+- 提醒恢复
+  - 设备重启后恢复未来计划的提醒
+  - 应用更新或权限变化后重新调度未来提醒
+
+## 语音交互流程
+
+语音助手的当前交互是：
+
+1. 点击语音入口
+2. 进入纯语音会话界面
+3. 点击开始录音并说出计划内容
+4. 识别完成后弹出预填充草稿
+5. 在弹窗中选择以下任一操作：
+   - `继续添加语音`：继续补充信息
+   - `手动调整`：跳转到表单手动修改
+   - `直接确认`：在信息完整时直接保存
+
+适合这样的输入方式：
+
+- “明天晚上七点去健身房练腿”
+- “周六上午十点和小李开会，地点在三楼会议室”
+- “下周一早上八点跑步，地点不填”
+
+## 技术栈
 
 - Kotlin
 - Jetpack Compose
 - Room
 - AlarmManager
-- Notification channels
+- BroadcastReceiver
+- 本地通知
+- DashScope 实时语音识别
+- Qwen 计划整理能力
 
-## Project structure
+## 项目结构
 
 - `app/src/main/java/com/example/planreminder/MainActivity.kt`
-  - app entry point and permission flow
+  - 应用入口
+  - 权限申请
+  - 语音录音与页面事件衔接
+
 - `app/src/main/java/com/example/planreminder/PlanViewModel.kt`
-  - plan creation, deletion, and reminder scheduling
+  - 页面状态管理
+  - 计划保存与删除
+  - 语音助手状态机
+  - 提醒调度协调
+
+- `app/src/main/java/com/example/planreminder/agent/*`
+  - 模型配置
+  - 语音识别客户端
+  - 计划草稿结构
+  - 语音助手状态模型
+
 - `app/src/main/java/com/example/planreminder/data/*`
-  - local database layer
+  - Room 实体、DAO、数据库、仓库
+
 - `app/src/main/java/com/example/planreminder/reminder/*`
-  - alarm scheduling, notification receiver, reboot recovery
+  - 本地提醒调度
+  - 通知接收与展示
+  - 重启恢复逻辑
+
 - `app/src/main/java/com/example/planreminder/ui/*`
-  - Compose UI
+  - Compose 页面
+  - 计划列表
+  - 设置弹窗
+  - 语音对话弹窗
+  - 预填充确认弹窗
 
-## Notes
+## 本地运行
 
-- Reminder lead time is fixed at 10 minutes.
-- If a plan is created less than 10 minutes before it starts, the app schedules the reminder as soon as possible.
-- On Android 13+, users need notification permission.
-- On Android 12+, exact alarms may require special user approval for best timing accuracy.
+1. 使用 Android Studio 打开项目目录
+2. 确认本机已经安装 Android SDK
+3. 等待 Gradle 同步完成
+4. 运行 `app` 配置到模拟器或真机
 
-## How to run
+## 配置说明
 
-1. Open the folder in Android Studio.
-2. Make sure your machine has an Android SDK installed.
-3. Let Android Studio sync Gradle.
-4. Run the `app` configuration on an emulator or physical device.
+在应用设置中需要填写语音相关配置：
 
-## Validation status in this workspace
+- 接口地址
+- 接口密钥
+- 模型名称
+- 提前提醒分钟数
 
-- Project files were generated successfully.
-- Gradle wrapper files were added.
-- Full build verification was not completed here because this machine does not currently have a working Android SDK setup, and Gradle distribution download from `services.gradle.org` timed out during CLI validation.
-"# PLAN" 
+如果要使用语音功能，还需要：
+
+- 麦克风权限
+- Android 13 及以上的通知权限
+- Android 12 及以上在需要高精度提醒时授予精确提醒能力
+
+## 构建验证
+
+当前工作区已通过以下编译验证：
+
+- `./gradlew.bat :app:compileDebugKotlin`
+
+本次验证时间：`2026-03-28`
+
+## 说明
+
+- 数据默认保存在本地数据库
+- 没有额外的服务端存储层
+- 如果计划创建时间距离开始时间过近，提醒会尽快触发
+- 语音整理结果是否可直接确认，取决于事项、日期、时间是否补全

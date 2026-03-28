@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 // 让 Room 查询保持精简，上层只需要关注应用行为本身。
@@ -18,6 +19,9 @@ interface PlanDao {
 
     @Delete
     suspend fun delete(planItem: PlanItem)
+
+    @Update
+    suspend fun update(planItem: PlanItem)
 
     @Query("SELECT * FROM plans WHERE id = :id LIMIT 1")
     suspend fun findById(id: Long): PlanItem?

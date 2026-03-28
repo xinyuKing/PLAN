@@ -15,13 +15,15 @@ class ReminderScheduler(
 ) {
     private val alarmManager = context.getSystemService(AlarmManager::class.java)
 
-    fun schedule(
-        planItem: PlanItem,
-        reminderLeadMinutes: Int,
-    ) {
-        val normalizedLeadMinutes = ReminderSettingsStore.normalizeReminderLeadMinutes(reminderLeadMinutes)
+    fun schedule(planItem: PlanItem) {
+        val normalizedLeadMinutes = ReminderSettingsStore.normalizeReminderLeadMinutes(
+            planItem.reminderLeadMinutes,
+        )
         val reminderAtMillis = reminderTimeFor(planItem, normalizedLeadMinutes)
-        val pendingIntent = createPendingIntent(planItem, normalizedLeadMinutes)
+        val pendingIntent = createPendingIntent(planItem)
+
+        // 先取消同一条计划的旧提醒，降低不同系统实现下重复或残留提醒的概率。
+        alarmManager.cancel(pendingIntent)
 
         try {
             if (canScheduleExactAlarms()) {
@@ -71,10 +73,10 @@ class ReminderScheduler(
         return maxOf(target, now + 2_000L)
     }
 
-    private fun createPendingIntent(
-        planItem: PlanItem,
-        reminderLeadMinutes: Int,
-    ): PendingIntent {
+    private fun createPendingIntent(planItem: PlanItem): PendingIntent {
+        val normalizedLeadMinutes = ReminderSettingsStore.normalizeReminderLeadMinutes(
+            planItem.reminderLeadMinutes,
+        )
         val intent = Intent(context, ReminderReceiver::class.java).apply {
             action = ReminderReceiver.ACTION_REMIND
             // 稳定的 data URI 能帮助 Android 把每条计划识别为不同的 PendingIntent。
@@ -83,7 +85,7 @@ class ReminderScheduler(
             putExtra(ReminderReceiver.EXTRA_TITLE, planItem.title)
             putExtra(ReminderReceiver.EXTRA_LOCATION, planItem.location)
             putExtra(ReminderReceiver.EXTRA_SCHEDULED_AT, planItem.scheduledAtMillis)
-            putExtra(ReminderReceiver.EXTRA_LEAD_MINUTES, reminderLeadMinutes)
+            putExtra(ReminderReceiver.EXTRA_LEAD_MINUTES, normalizedLeadMinutes)
         }
         return PendingIntent.getBroadcast(
             context,

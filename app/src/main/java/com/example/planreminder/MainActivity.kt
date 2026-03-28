@@ -7,12 +7,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,11 +24,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.planreminder.agent.AgentSettings
 import com.example.planreminder.agent.DashScopeRealtimeSpeechClient
+import com.example.planreminder.i18n.AppLanguage
+import com.example.planreminder.i18n.appStringsFor
 import com.example.planreminder.ui.PlanReminderScreen
 import com.example.planreminder.ui.theme.PlanReminderTheme
 
-// 承载 Compose 界面，并把 Android 权限和语音输入能力接入页面状态。
-class MainActivity : ComponentActivity() {
+// 承载 Compose 页面，并把权限、语音输入和页面状态接起来。
+class MainActivity : AppCompatActivity() {
     private val viewModel: PlanViewModel by viewModels()
     private val realtimeSpeechClient = DashScopeRealtimeSpeechClient()
 
@@ -45,6 +47,8 @@ class MainActivity : ComponentActivity() {
                 val agentSettings by viewModel.agentSettings.collectAsStateWithLifecycle()
                 val reminderLeadMinutes by viewModel.reminderLeadMinutes.collectAsStateWithLifecycle()
                 val voiceAgentState by viewModel.voiceAgentState.collectAsStateWithLifecycle()
+                val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
+                val strings = appStringsFor(appLanguage)
 
                 val requestNotificationPermission = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission(),
@@ -56,18 +60,19 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.RequestPermission(),
                 ) { granted ->
                     if (granted) {
-                        startAppVoiceInput(agentSettings)
+                        startAppVoiceInput(agentSettings, appLanguage)
                     } else {
-                        viewModel.showMessage("请先允许麦克风权限，再使用语音输入。")
+                        viewModel.showMessage(strings.allowMicPermissionMessage)
                     }
                 }
 
                 DisposableEffect(lifecycle) {
-                    // 用户从系统设置返回后，需要重新检查通知和精确提醒权限状态。
+                    // 用户从系统设置返回后，要重新检查通知和精确提醒权限状态。
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
                             hasNotificationPermission = checkNotificationPermission()
                             canScheduleExactAlarms = viewModel.canScheduleExactAlarms()
+                            viewModel.refreshReminderSchedules()
                         }
                     }
                     lifecycle.addObserver(observer)
@@ -81,6 +86,7 @@ class MainActivity : ComponentActivity() {
                     reminderLeadMinutes = reminderLeadMinutes,
                     messages = viewModel.messages,
                     agentSettings = agentSettings,
+                    appLanguage = appLanguage,
                     voiceAgentState = voiceAgentState,
                     onRequestNotificationPermission = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -100,21 +106,30 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onAddPlan = viewModel::addPlan,
+                    onUpdatePlan = viewModel::updatePlan,
                     onDeletePlan = viewModel::deletePlan,
                     onSaveSettings = viewModel::saveSettings,
                     onOpenVoiceAgent = viewModel::openVoiceAgent,
+                    onOpenVoiceAgentForEdit = viewModel::openVoiceAgentForEdit,
                     onDismissVoiceAgent = {
                         cancelAppVoiceInput()
                         viewModel.closeVoiceAgent()
                     },
                     onStartVoiceInput = {
                         if (checkAudioPermission()) {
-                            startAppVoiceInput(agentSettings)
+                            startAppVoiceInput(agentSettings, appLanguage)
                         } else {
                             requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
                     onStopVoiceInput = ::stopAppVoiceInput,
+                    onContinueVoiceConversation = {
+                        if (checkAudioPermission()) {
+                            continueAppVoiceInput(agentSettings, appLanguage)
+                        } else {
+                            requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
                     onConfirmVoicePlan = viewModel::confirmVoicePlan,
                 )
             }
@@ -144,9 +159,10 @@ class MainActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun startAppVoiceInput(settings: AgentSettings) {
+    private fun startAppVoiceInput(settings: AgentSettings, language: AppLanguage) {
+        val strings = appStringsFor(language)
         if (!settings.isConfigured()) {
-            viewModel.showMessage("请先完成接口设置，再使用语音添加。")
+            viewModel.showMessage(strings.configureApiBeforeVoiceMessage)
             return
         }
 
@@ -155,7 +171,7 @@ class MainActivity : ComponentActivity() {
             listener = object : DashScopeRealtimeSpeechClient.Listener {
                 override fun onRecordingStarted() {
                     viewModel.markVoiceRecordingStarted()
-                    viewModel.showMessage("已开始录音，说完后点击“结束录音”。")
+                    viewModel.showMessage(strings.startedRecordingMessage)
                 }
 
                 override fun onRecordingStopped() {
@@ -177,6 +193,12 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
+    }
+
+    private fun continueAppVoiceInput(settings: AgentSettings, language: AppLanguage) {
+        realtimeSpeechClient.cancel()
+        viewModel.continueVoiceConversation()
+        startAppVoiceInput(settings, language)
     }
 
     private fun stopAppVoiceInput() {
