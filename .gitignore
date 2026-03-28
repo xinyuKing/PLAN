@@ -1,0 +1,12 @@
+*.iml
+.gradle
+.gradle-home
+.idea
+local.properties
+/build
+/app/build
+/captures
+.DS_Store
+.android-sdk-install/
+gradle/wrapper/gradle-wrapper.jar
+*.jar.zip
